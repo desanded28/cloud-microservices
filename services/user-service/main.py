@@ -18,6 +18,7 @@ import bcrypt
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+# obviously don't ship the default — this is just for local dev
 SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-key-change-in-prod")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -39,7 +40,7 @@ def verify_password(password: str, hashed: str) -> bool:
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA journal_mode=WAL")  # WAL mode = better concurrent read performance
     return conn
 
 
@@ -171,6 +172,7 @@ def login(creds: UserLogin):
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM users WHERE username = ?", (creds.username,)).fetchone()
+        # same error for bad user vs bad password — don't leak which one was wrong
         if not row or not verify_password(creds.password, row["hashed_password"]):
             raise HTTPException(status_code=401, detail="Invalid username or password")
         if not row["is_active"]:
@@ -218,6 +220,7 @@ def get_user(user_id: str, payload: dict = Depends(verify_token)):
 
 @app.put("/users/{user_id}", response_model=UserOut)
 def update_user(user_id: str, updates: UserUpdate, payload: dict = Depends(verify_token)):
+    # users can edit themselves, admins can edit anyone
     if payload["sub"] != user_id and payload.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Not authorized to update this user")
 
@@ -233,6 +236,7 @@ def update_user(user_id: str, updates: UserUpdate, payload: dict = Depends(verif
             raise HTTPException(status_code=400, detail="No fields to update")
 
         fields["updated_at"] = now
+        # build SET clause dynamically so we only touch fields that were sent
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         values = list(fields.values()) + [user_id]
         conn.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
@@ -261,7 +265,7 @@ def delete_user(user_id: str, payload: dict = Depends(verify_token)):
 
 @app.get("/users/verify/token")
 def verify_token_endpoint(payload: dict = Depends(verify_token)):
-    """Called internally by other services to validate a JWT."""
+    """Called internally by other services to validate a JWT — not meant for end users."""
     return {"valid": True, "user_id": payload["sub"], "username": payload["username"], "role": payload.get("role", "member")}
 
 

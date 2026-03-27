@@ -38,9 +38,9 @@ request_counts: dict[str, list[float]] = defaultdict(list)
 
 def check_rate_limit(client_ip: str):
     now = time.time()
-    window = now - 60
+    window = now - 60  # sliding window, not calendar minute
     timestamps = request_counts[client_ip]
-    # Prune old entries
+    # toss anything older than 60s so the list doesn't grow forever
     request_counts[client_ip] = [t for t in timestamps if t > window]
     if len(request_counts[client_ip]) >= RATE_LIMIT:
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
@@ -81,6 +81,7 @@ async def gateway_health():
                 results[name] = resp.json() if resp.status_code == 200 else {"status": "unhealthy"}
             except Exception:
                 results[name] = {"status": "unreachable"}
+    # one unhealthy service = gateway reports not-all-healthy
     all_healthy = all(r.get("status") == "healthy" for r in results.values())
     return {"gateway": "healthy", "services": results, "all_healthy": all_healthy}
 
@@ -99,6 +100,7 @@ async def proxy_request(request: Request, service_key: str, upstream_path: str) 
 
     url = f"{base_url}{upstream_path}"
     headers = dict(request.headers)
+    # strip the host header so the upstream service doesn't get confused
     headers.pop("host", None)
 
     body = await request.body()
@@ -115,6 +117,7 @@ async def proxy_request(request: Request, service_key: str, upstream_path: str) 
         except httpx.ConnectError:
             raise HTTPException(status_code=503, detail=f"Service '{service_key}' is unavailable")
 
+    # these headers will break things if we pass them through as-is
     excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
     response_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_headers}
 
@@ -135,7 +138,7 @@ async def route_request(request: Request, path: str):
 
     full_path = f"/api/{path}"
 
-    # Find the matching route prefix
+    # longest prefix first so /api/webhooks doesn't accidentally match /api/w*
     for prefix, (service_key, upstream_prefix) in sorted(ROUTE_MAP.items(), key=lambda x: -len(x[0])):
         if full_path.startswith(prefix):
             remainder = full_path[len(prefix):]

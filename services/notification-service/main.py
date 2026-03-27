@@ -22,6 +22,7 @@ MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "10000"))
 # ---------------------------------------------------------------------------
 # In-memory stores
 # ---------------------------------------------------------------------------
+# deque with maxlen means old notifications get evicted automatically
 notification_queue: deque = deque(maxlen=MAX_QUEUE_SIZE)
 webhooks: dict[str, dict] = {}  # id -> webhook config
 
@@ -79,6 +80,7 @@ async def deliver_to_webhooks(event: str, payload: dict) -> list[str]:
     for wh_id, wh in webhooks.items():
         if not wh["is_active"]:
             continue
+        # wildcard subscribers get everything, others only their registered events
         if "*" not in wh["events"] and event not in wh["events"]:
             continue
         try:
@@ -87,7 +89,7 @@ async def deliver_to_webhooks(event: str, payload: dict) -> list[str]:
                 if wh.get("secret"):
                     headers["X-Webhook-Secret"] = wh["secret"]
                 resp = await client.post(wh["url"], json=payload, headers=headers)
-                if resp.status_code < 400:
+                if resp.status_code < 400:  # 2xx or 3xx counts as delivered
                     delivered.append(wh_id)
         except Exception:
             # Mark as failed but don't deactivate after a single failure
@@ -107,7 +109,7 @@ async def create_notification(notif: NotificationCreate):
     notif_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
 
-    # Build payload from all provided fields
+    # strip None fields and the event key itself (it's already top-level)
     data = {k: v for k, v in notif.model_dump().items() if v is not None and k != "event"}
 
     # Deliver to webhooks
@@ -133,7 +135,7 @@ def list_notifications(
     items = list(notification_queue)
     if event:
         items = [n for n in items if n["event"] == event]
-    # Most recent first
+    # newest first — deque is ordered by insertion so we reverse
     items = list(reversed(items))
     return items[offset : offset + limit]
 

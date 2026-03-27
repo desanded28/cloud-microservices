@@ -136,6 +136,7 @@ def row_to_task(row: sqlite3.Row) -> dict:
 # Auth helper – validates JWT via User Service
 # ---------------------------------------------------------------------------
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    # we don't verify JWTs ourselves — the user service is the source of truth
     token = credentials.credentials
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
@@ -159,7 +160,7 @@ async def send_notification(event: str, payload: dict):
                 json={"event": event, **payload},
             )
     except Exception:
-        pass  # Non-critical; log in production
+        pass  # notifications failing shouldn't block the main request
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -213,6 +214,7 @@ def list_tasks(
 ):
     conn = get_db()
     try:
+        # WHERE 1=1 so we can just keep appending AND clauses
         query = "SELECT * FROM tasks WHERE 1=1"
         params: list = []
 
@@ -266,9 +268,9 @@ async def update_task(task_id: str, updates: TaskUpdate, user: dict = Depends(ve
             if v is not None:
                 if k == "tags":
                     import json
-                    fields[k] = json.dumps(v)
+                    fields[k] = json.dumps(v)  # tags stored as JSON string in sqlite
                 elif hasattr(v, "value"):
-                    fields[k] = v.value
+                    fields[k] = v.value  # enum -> its string value
                 else:
                     fields[k] = v
 
@@ -318,7 +320,7 @@ async def update_task_status(task_id: str, body: StatusUpdate, user: dict = Depe
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        old_status = row["status"]
+        old_status = row["status"]  # grab before we overwrite
         now = datetime.utcnow().isoformat()
         conn.execute(
             "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
