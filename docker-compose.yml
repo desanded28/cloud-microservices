@@ -1,0 +1,87 @@
+version: "3.9"
+
+services:
+  # ---- API Gateway (port 8000) ----
+  gateway:
+    build:
+      context: .
+      args:
+        SERVICE: gateway
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: "8000"
+      USER_SERVICE_URL: "http://user-service:8001"
+      TASK_SERVICE_URL: "http://task-service:8002"
+      NOTIFICATION_SERVICE_URL: "http://notification-service:8003"
+      RATE_LIMIT_PER_MINUTE: "200"
+    depends_on:
+      - user-service
+      - task-service
+      - notification-service
+    networks:
+      - task-net
+    restart: unless-stopped
+
+  # ---- User Service (port 8001) ----
+  user-service:
+    build:
+      context: .
+      args:
+        SERVICE: services/user-service
+    ports:
+      - "8001:8001"
+    environment:
+      PORT: "8001"
+      JWT_SECRET: "${JWT_SECRET:-please-set-in-dotenv}"
+      USER_DB_PATH: "/app/data/users.db"
+    volumes:
+      - user-data:/app/data
+    networks:
+      - task-net
+    restart: unless-stopped
+
+  # ---- Task Service (port 8002) ----
+  task-service:
+    build:
+      context: .
+      args:
+        SERVICE: services/task-service
+    ports:
+      - "8002:8002"
+    environment:
+      PORT: "8002"
+      USER_SERVICE_URL: "http://user-service:8001"
+      NOTIFICATION_SERVICE_URL: "http://notification-service:8003"
+      TASK_DB_PATH: "/app/data/tasks.db"
+    volumes:
+      - task-data:/app/data
+    depends_on:
+      - user-service
+      - notification-service
+    networks:
+      - task-net
+    restart: unless-stopped
+
+  # ---- Notification Service (port 8003) ----
+  notification-service:
+    build:
+      context: .
+      args:
+        SERVICE: services/notification-service
+    ports:
+      - "8003:8003"
+    environment:
+      PORT: "8003"
+      MAX_QUEUE_SIZE: "10000"
+    networks:
+      - task-net
+    restart: unless-stopped
+
+volumes:
+  user-data:
+  task-data:
+
+networks:
+  task-net:
+    driver: bridge
